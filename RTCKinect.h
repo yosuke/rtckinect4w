@@ -239,6 +239,12 @@ class RTCKinect
   int m_enable_camera;
   /*!
    * 
+   * - Name:  enable_microphone
+   * - DefaultValue: 1
+   */
+  int m_enable_microphone;
+  /*!
+   * 
    * - Name:  enable_depth
    * - DefaultValue: 1
    */
@@ -307,6 +313,10 @@ class RTCKinect
   /*!
    */
   OutPort<NuiSkeletonFrame> m_skeletonOut;
+  TimedOctetSeq m_sound;
+  /*!
+   */
+  OutPort<TimedOctetSeq> m_soundOut;
   SoundSourceLocation m_soundSource;
   /*!
    */

@@ -66,7 +66,8 @@ RTCKinect::RTCKinect(RTC::Manager* manager)
     m_depthOut("depth", m_depth),
     m_currentElevationOut("currentElevation", m_currentElevation),
     m_skeletonOut("skeleton", m_skeleton),
-    m_soundSourceOut("dp_name", m_soundSource)
+    m_soundOut("sound", m_sound),
+    m_soundSourceOut("soundSource", m_soundSource)
 
     // </rtc-template>
 {
@@ -93,7 +94,8 @@ RTC::ReturnCode_t RTCKinect::onInitialize()
   addOutPort("depth", m_depthOut);
   addOutPort("currentElevation", m_currentElevationOut);
   addOutPort("skeleton", m_skeletonOut);
-  addOutPort("dp_name", m_soundSourceOut);
+  addOutPort("sound", m_soundOut);
+  addOutPort("soundSource", m_soundSourceOut);
   
   // Set service provider to Ports
   
@@ -107,6 +109,7 @@ RTC::ReturnCode_t RTCKinect::onInitialize()
   // Bind variables and configuration variable
   bindParameter("debug", m_debug, "0");
   bindParameter("enable_camera", m_enable_camera, "1");
+  bindParameter("enable_microphone", m_enable_microphone, "1");
   bindParameter("enable_depth", m_enable_depth, "1");
   bindParameter("camera_width", m_camera_width, "640");
   bindParameter("camera_height", m_camera_height, "480");
