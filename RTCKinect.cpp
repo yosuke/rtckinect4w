@@ -228,7 +228,7 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
     /**
 	 * Initialization for raw sound input.
 	 */
-	if(m_enable_microphone) {
+	if (m_enable_microphone) {
 		UINT deviceCount;
 		IMMDeviceEnumerator *deviceEnumerator = NULL;
 		IMMDeviceCollection *deviceCollection = NULL;
@@ -248,8 +248,7 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 			std::cout << "Unable to get device collection length." << std::endl;
 			return RTC::RTC_ERROR;
 		}
-		for (UINT i = 0; i < deviceCount; i++)
-		{
+		for (UINT i = 0; i < deviceCount; i++) {
 			IPropertyStore *propertyStore;
 			PROPVARIANT friendlyName;
 			PropVariantInit(&friendlyName);
@@ -298,7 +297,7 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 			return RTC::RTC_ERROR;
 		}
 	    m_AudioFrameSize = (m_pAudioMixFormat->wBitsPerSample / 8) * m_pAudioMixFormat->nChannels;
-		std::cout << "Audio capture format (" << m_pAudioMixFormat->nChannels << " channels, " << m_pAudioMixFormat->wBitsPerSample / 8 << " bytes per sample)"<< std::endl;
+		std::cout << "Audio capture format (" << m_pAudioMixFormat->nChannels << " channels, " << m_pAudioMixFormat->wBitsPerSample << " bits)"<< std::endl;
 		hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_NOPERSIST, 100000, 0, m_pAudioMixFormat, NULL);
 		if (FAILED(hr)) {
 			std::cout << "Unable to initialize audio client." << std::endl;
@@ -323,11 +322,13 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 RTC::ReturnCode_t RTCKinect::onDeactivated(RTC::UniqueId ec_id)
 {
 	NuiShutdown( );
-	m_pAudioClient->Stop();
-    SafeRelease(&m_pAudioEndpoint);
-    SafeRelease(&m_pAudioClient);
-    SafeRelease(&m_pAudioCaptureClient);
-    CoTaskMemFree(m_pAudioMixFormat);
+	if (m_enable_microphone) {
+		m_pAudioClient->Stop();
+		SafeRelease(&m_pAudioEndpoint);
+		SafeRelease(&m_pAudioClient);
+		SafeRelease(&m_pAudioCaptureClient);
+		CoTaskMemFree(m_pAudioMixFormat);
+	}
 	return RTC::RTC_OK;
 }
 
@@ -551,11 +552,11 @@ HRESULT RTCKinect::WriteRawSound()
 			UINT32 dataSize = framesAvailable * m_AudioFrameSize;
 			m_sound.data.length(dataSize);
             if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
-				for (UINT i = 0; i < dataSize; i++) {
+				for (UINT32 i = 0; i < dataSize; i++) {
 					m_sound.data[i] = 0;
 				}
             } else {
-				for (UINT i = 0; i < dataSize; i++) {
+				for (UINT32 i = 0; i < dataSize; i++) {
 					m_sound.data[i] = pData[i];
 				}
             }
