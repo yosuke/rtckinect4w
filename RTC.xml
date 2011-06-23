@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <rtc:RtcProfile rtc:version="0.2" rtc:id="RTC:ysuga.net:Experimental:RTCKinect:1.0.0" xmlns:rtcExt="http://www.openrtp.org/namespaces/rtc_ext" xmlns:rtcDoc="http://www.openrtp.org/namespaces/rtc_doc" xmlns:rtc="http://www.openrtp.org/namespaces/rtc" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-    <rtc:BasicInfo xsi:type="rtcExt:basic_info_ext" rtcExt:saveProject="RTCKinect" rtc:updateDate="2011-06-19T21:03:41.005+09:00" rtc:creationDate="2011-06-19T19:54:55.862+09:00" rtc:version="1.0.0" rtc:vendor="ysuga.net" rtc:maxInstances="1" rtc:executionType="PeriodicExecutionContext" rtc:executionRate="10.0" rtc:description="RTC Kinect 4 Windows" rtc:category="Experimental" rtc:componentKind="DataFlowComponent" rtc:activityType="PERIODIC" rtc:componentType="STATIC" rtc:name="RTCKinect"/>
+    <rtc:BasicInfo xsi:type="rtcExt:basic_info_ext" rtcExt:saveProject="RTCKinect" rtc:updateDate="2011-06-19T21:03:41.005+09:00" rtc:creationDate="2011-06-19T19:54:55.862+09:00" rtc:version="1.0.0" rtc:vendor="ysuga.net and Yosuke Matsusaka" rtc:maxInstances="1" rtc:executionType="PeriodicExecutionContext" rtc:executionRate="10.0" rtc:description="RTC Kinect 4 Windows" rtc:category="Experimental" rtc:componentKind="DataFlowComponent" rtc:activityType="PERIODIC" rtc:componentType="STATIC" rtc:name="RTCKinect"/>
     <rtc:Actions>
         <rtc:OnInitialize xsi:type="rtcDoc:action_status_doc" rtc:implemented="true"/>
         <rtc:OnFinalize xsi:type="rtcDoc:action_status_doc" rtc:implemented="false"/>

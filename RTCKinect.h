@@ -19,6 +19,20 @@
 #include <rtm/idl/ExtendedDataTypesSkel.h>
 #include <rtm/idl/InterfaceDataTypesSkel.h>
 
+#include <MMDeviceAPI.h>
+#include <AudioClient.h>
+#include <AudioPolicy.h>
+#include <functiondiscoverykeys.h>
+
+template <class T> void SafeRelease(T **ppT)
+{
+    if (*ppT)
+    {
+        (*ppT)->Release();
+        *ppT = NULL;
+    }
+}
+
 // Service implementation headers
 // <rtc-template block="service_impl_h">
 
@@ -354,6 +368,16 @@ class RTCKinect
 	HRESULT WriteDepthImage();
 	HRESULT WriteElevation();
 	HRESULT WriteSkeleton();
+
+    //  Core Audio Capture member variables.
+    IMMDevice *         m_pAudioEndpoint;
+    IAudioClient *      m_pAudioClient;
+    IAudioCaptureClient *m_pAudioCaptureClient;
+    WAVEFORMATEX *      m_pAudioMixFormat;
+    size_t              m_AudioFrameSize;
+
+	HRESULT WriteRawSound();
+
 };
 
 

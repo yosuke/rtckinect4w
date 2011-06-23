@@ -9,12 +9,11 @@
 
 
 #include <windows.h>
-#include "MSR_NuiApi.h"
-
+#include <assert.h>
+#include <avrt.h>
+#include <MSR_NuiApi.h>
 
 #include "RTCKinect.h"
-
-
 
 // Module specification
 // <rtc-template block="module_spec">
@@ -24,7 +23,7 @@ static const char* rtckinect_spec[] =
     "type_name",         "RTCKinect",
     "description",       "RTC Kinect 4 Windows",
     "version",           "1.0.0",
-    "vendor",            "ysuga.net",
+    "vendor",            "ysuga.net and Yosuke Matsusaka",
     "category",          "Experimental",
     "activity_type",     "PERIODIC",
     "kind",              "DataFlowComponent",
@@ -35,6 +34,7 @@ static const char* rtckinect_spec[] =
     "conf.default.debug", "0",
     "conf.default.enable_camera", "1",
     "conf.default.enable_depth", "1",
+    "conf.default.enable_microphone", "1",
     "conf.default.camera_width", "640",
     "conf.default.camera_height", "480",
     "conf.default.depth_width", "320",
@@ -44,6 +44,7 @@ static const char* rtckinect_spec[] =
     "conf.__widget__.debug", "text",
     "conf.__widget__.enable_camera", "text",
     "conf.__widget__.enable_depth", "text",
+    "conf.__widget__.enable_microphone", "text",
     "conf.__widget__.camera_width", "text",
     "conf.__widget__.camera_height", "text",
     "conf.__widget__.depth_width", "text",
@@ -224,6 +225,97 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 	this->m_depth.height = m_depth_height;
 	this->m_depth.pixels.length(m_depth_width*m_depth_height*3);
 
+    /**
+	 * Initialization for raw sound input.
+	 */
+	if(m_enable_microphone) {
+		UINT deviceCount;
+		IMMDeviceEnumerator *deviceEnumerator = NULL;
+		IMMDeviceCollection *deviceCollection = NULL;
+
+		hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&deviceEnumerator));
+		if (FAILED(hr)) {
+			std::cout << "Unable to instantiate device enumerator." << std::endl;
+			return RTC::RTC_ERROR;
+		}
+		hr = deviceEnumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &deviceCollection);
+		if (FAILED(hr)) {
+			std::cout << "Unable to retrieve device collection." << std::endl;
+			return RTC::RTC_ERROR;
+		}
+		hr = deviceCollection->GetCount(&deviceCount);
+		if (FAILED(hr)) {
+			std::cout << "Unable to get device collection length." << std::endl;
+			return RTC::RTC_ERROR;
+		}
+		for (UINT i = 0; i < deviceCount; i++)
+		{
+			IPropertyStore *propertyStore;
+			PROPVARIANT friendlyName;
+			PropVariantInit(&friendlyName);
+
+			hr = deviceCollection->Item(i, &m_pAudioEndpoint);
+			if (FAILED(hr)) {
+				std::cout << "Unable to get device collection item." << std::endl;
+				return RTC::RTC_ERROR;
+			}
+
+			hr = m_pAudioEndpoint->OpenPropertyStore(STGM_READ, &propertyStore);
+			if (FAILED(hr)) {
+				std::cout << "Unable to open device property store." << std::endl;
+				return RTC::RTC_ERROR;
+			}
+
+			hr = propertyStore->GetValue(PKEY_Device_FriendlyName, &friendlyName);
+			SafeRelease(&propertyStore);
+			if (FAILED(hr)) {
+				std::cout << "Unable to retrieve friendly name for device." << std::endl;
+				return RTC::RTC_ERROR;
+			}
+
+			std::cout << "Scanning for Kinect Audio device..." << std::endl;
+			if (friendlyName.vt == VT_LPWSTR) {
+				wprintf(L"  %s\n", friendlyName.pwszVal);
+				if (wcscmp(friendlyName.pwszVal, L"Kinect USB Audio") != 0) {
+					std::cout << "  Found Kinect Audio device" << std::endl;
+					break;
+				}
+			}
+			PropVariantClear(&friendlyName);
+			SafeRelease(&m_pAudioEndpoint);
+		}
+		SafeRelease(&deviceCollection);
+		SafeRelease(&deviceEnumerator);
+
+		hr = m_pAudioEndpoint->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, NULL, reinterpret_cast<void **>(&m_pAudioClient));
+		if (FAILED(hr)) {
+			std::cout << "Unable to activate audio client." << std::endl;
+			return RTC::RTC_ERROR;
+		}
+		hr = m_pAudioClient->GetMixFormat(&m_pAudioMixFormat);
+		if (FAILED(hr)) {
+			std::cout << "Unable to get mix format on audio client." << std::endl;
+			return RTC::RTC_ERROR;
+		}
+	    m_AudioFrameSize = (m_pAudioMixFormat->wBitsPerSample / 8) * m_pAudioMixFormat->nChannels;
+		std::cout << "Audio capture format (" << m_pAudioMixFormat->nChannels << " channels, " << m_pAudioMixFormat->wBitsPerSample / 8 << " bytes per sample)"<< std::endl;
+		hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_NOPERSIST, 100000, 0, m_pAudioMixFormat, NULL);
+		if (FAILED(hr)) {
+			std::cout << "Unable to initialize audio client." << std::endl;
+			return RTC::RTC_ERROR;
+		}
+		hr = m_pAudioClient->GetService(IID_PPV_ARGS(&m_pAudioCaptureClient));
+		if (FAILED(hr)) {
+			std::cout << "Unable to get audio capture client." << std::endl;
+			return RTC::RTC_ERROR;
+		}
+		hr = m_pAudioClient->Start();
+		if (FAILED(hr)) {
+			std::cout << "Unable to start audio capture client." << std::endl;
+			return RTC::RTC_ERROR;
+		}
+	}
+
 	return RTC::RTC_OK;
 }
 
@@ -231,12 +323,17 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 RTC::ReturnCode_t RTCKinect::onDeactivated(RTC::UniqueId ec_id)
 {
 	NuiShutdown( );
+	m_pAudioClient->Stop();
+    SafeRelease(&m_pAudioEndpoint);
+    SafeRelease(&m_pAudioClient);
+    SafeRelease(&m_pAudioCaptureClient);
+    CoTaskMemFree(m_pAudioMixFormat);
 	return RTC::RTC_OK;
 }
 
 
 /**
- * Wriing camera image to imgae port
+ * Writing camera image to image port
  *
  * Color space conversion should be accelerated
  * (OpenCV or Intel Performance Primitive Library 
@@ -438,6 +535,40 @@ HRESULT RTCKinect::WriteSkeleton()
 	return S_OK;
 }
 
+/**
+ *
+ */
+HRESULT RTCKinect::WriteRawSound()
+{
+    BYTE *pData;
+    UINT32 framesAvailable;
+    DWORD  flags;
+	HRESULT hr;
+
+    hr = m_pAudioCaptureClient->GetBuffer(&pData, &framesAvailable, &flags, NULL, NULL);
+    if (SUCCEEDED(hr)) {
+        if (framesAvailable > 0) {
+			UINT32 dataSize = framesAvailable * m_AudioFrameSize;
+			m_sound.data.length(dataSize);
+            if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+				for (UINT i = 0; i < dataSize; i++) {
+					m_sound.data[i] = 0;
+				}
+            } else {
+				for (UINT i = 0; i < dataSize; i++) {
+					m_sound.data[i] = pData[i];
+				}
+            }
+			m_depthOut.write();
+        }
+        hr = m_pAudioCaptureClient->ReleaseBuffer(framesAvailable);
+        if (FAILED(hr)) {
+			std::cout << "Unable to release capture buffer." << std::endl;
+        }
+    }
+	return S_OK;
+}
+
 RTC::ReturnCode_t RTCKinect::onExecute(RTC::UniqueId ec_id)
 {
 	if(m_enable_camera) {
@@ -458,6 +589,12 @@ RTC::ReturnCode_t RTCKinect::onExecute(RTC::UniqueId ec_id)
 
 	if( FAILED(WriteSkeleton()) ) {
 		return RTC::RTC_ERROR;
+	}
+
+	if(m_enable_microphone) {
+		if( FAILED(WriteRawSound())) {
+			return RTC::RTC_ERROR;
+		}
 	}
 
 	return RTC::RTC_OK;
