@@ -68,6 +68,7 @@ RTCKinect::RTCKinect(RTC::Manager* manager)
     m_currentElevationOut("currentElevation", m_currentElevation),
     m_skeletonOut("skeleton", m_skeleton),
     m_soundOut("sound", m_sound),
+    m_soundMonitorOut("soundMonitor", m_soundMonitor),
     m_soundSourceOut("soundSource", m_soundSource)
 
     // </rtc-template>
@@ -96,6 +97,7 @@ RTC::ReturnCode_t RTCKinect::onInitialize()
   addOutPort("currentElevation", m_currentElevationOut);
   addOutPort("skeleton", m_skeletonOut);
   addOutPort("sound", m_soundOut);
+  addOutPort("soundMonitor", m_soundMonitorOut);
   addOutPort("soundSource", m_soundSourceOut);
   
   // Set service provider to Ports
@@ -170,8 +172,7 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 
 
 	HRESULT hr = NuiInitialize(dwFlag); 
-    if( FAILED( hr ) )
-    {
+    if( FAILED( hr ) ) {
 		std::cout << "NUI Initialize Failed." << std::endl;
 		return RTC::RTC_ERROR;
     }
@@ -211,8 +212,7 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 			hr = NuiImageStreamOpen(::NUI_IMAGE_TYPE_DEPTH, eResolution, 0, 2, NULL, &m_pDepthStreamHandle );
 		}
 	}
-    if( FAILED( hr ) )
-    {
+    if( FAILED( hr ) ) {
 		std::cout << "NUI Image Stream Open Failed." << std::endl;
 		return RTC::RTC_ERROR;
     }
@@ -251,15 +251,16 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 		for (UINT i = 0; i < deviceCount; i++) {
 			IPropertyStore *propertyStore;
 			PROPVARIANT friendlyName;
+			IMMDevice *endpoint;
 			PropVariantInit(&friendlyName);
 
-			hr = deviceCollection->Item(i, &m_pAudioEndpoint);
+			hr = deviceCollection->Item(i, &endpoint);
 			if (FAILED(hr)) {
 				std::cout << "Unable to get device collection item." << std::endl;
 				return RTC::RTC_ERROR;
 			}
 
-			hr = m_pAudioEndpoint->OpenPropertyStore(STGM_READ, &propertyStore);
+			hr = endpoint->OpenPropertyStore(STGM_READ, &propertyStore);
 			if (FAILED(hr)) {
 				std::cout << "Unable to open device property store." << std::endl;
 				return RTC::RTC_ERROR;
@@ -277,15 +278,24 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 				wprintf(L"  %s\n", friendlyName.pwszVal);
 				if (wcscmp(friendlyName.pwszVal, L"Kinect USB Audio") != 0) {
 					std::cout << "  Found Kinect Audio device" << std::endl;
+					m_pAudioEndpoint = endpoint;
+					m_pAudioEndpoint->AddRef();
+					PropVariantClear(&friendlyName);
+					SafeRelease(&endpoint);
 					break;
 				}
 			}
 			PropVariantClear(&friendlyName);
-			SafeRelease(&m_pAudioEndpoint);
+			SafeRelease(&endpoint);
 		}
 		SafeRelease(&deviceCollection);
 		SafeRelease(&deviceEnumerator);
 
+		m_AudioShutdownEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+		if (m_AudioShutdownEvent == NULL) {
+			std::cout << "Unable to create shutdown event." << std::endl;
+			return RTC::RTC_ERROR;
+		}    
 		hr = m_pAudioEndpoint->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, NULL, reinterpret_cast<void **>(&m_pAudioClient));
 		if (FAILED(hr)) {
 			std::cout << "Unable to activate audio client." << std::endl;
@@ -297,8 +307,16 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 			return RTC::RTC_ERROR;
 		}
 	    m_AudioFrameSize = (m_pAudioMixFormat->wBitsPerSample / 8) * m_pAudioMixFormat->nChannels;
+		m_AudioCaptureBufferSize = m_pAudioMixFormat->nSamplesPerSec * 5 * m_AudioFrameSize;
+		m_pAudioCaptureBuffer = new (std::nothrow) BYTE[m_AudioCaptureBufferSize];
+		if (m_pAudioCaptureBuffer == NULL) {
+			std::cout << "Unable to allocate capture buffer." << std::endl;
+			return RTC::RTC_ERROR;
+		}
+		m_AudioCurrentCaptureIndex = 0;
 		std::cout << "Audio capture format (" << m_pAudioMixFormat->nChannels << " channels, " << m_pAudioMixFormat->wBitsPerSample << " bits)"<< std::endl;
-		hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_NOPERSIST, 100000, 0, m_pAudioMixFormat, NULL);
+		m_AudioLatency = 10;
+		hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_NOPERSIST, m_AudioLatency*10000, 0, m_pAudioMixFormat, NULL);
 		if (FAILED(hr)) {
 			std::cout << "Unable to initialize audio client." << std::endl;
 			return RTC::RTC_ERROR;
@@ -306,6 +324,11 @@ RTC::ReturnCode_t RTCKinect::onActivated(RTC::UniqueId ec_id)
 		hr = m_pAudioClient->GetService(IID_PPV_ARGS(&m_pAudioCaptureClient));
 		if (FAILED(hr)) {
 			std::cout << "Unable to get audio capture client." << std::endl;
+			return RTC::RTC_ERROR;
+		}
+		m_AudioCaptureThread = CreateThread(NULL, 0, AudioCaptureThread, this, 0, NULL);
+		if (m_AudioCaptureThread == NULL) {
+			std::cout << "Unable to create transport thread: " << GetLastError() << std::endl;
 			return RTC::RTC_ERROR;
 		}
 		hr = m_pAudioClient->Start();
@@ -323,11 +346,24 @@ RTC::ReturnCode_t RTCKinect::onDeactivated(RTC::UniqueId ec_id)
 {
 	NuiShutdown( );
 	if (m_enable_microphone) {
-		m_pAudioClient->Stop();
+		HRESULT hr;
+		if (m_AudioShutdownEvent) {
+			SetEvent(m_AudioShutdownEvent);
+		}
+		hr = m_pAudioClient->Stop();
+		if (FAILED(hr)) {
+			std::cout << "Unable to stop audio client." << std::endl;
+		}
+		if (m_AudioCaptureThread) {
+			WaitForSingleObject(m_AudioCaptureThread, INFINITE);
+			CloseHandle(m_AudioCaptureThread);
+			m_AudioCaptureThread = NULL;
+		}
 		SafeRelease(&m_pAudioEndpoint);
 		SafeRelease(&m_pAudioClient);
 		SafeRelease(&m_pAudioCaptureClient);
 		CoTaskMemFree(m_pAudioMixFormat);
+		delete [] m_pAudioCaptureBuffer;
 	}
 	return RTC::RTC_OK;
 }
@@ -541,31 +577,35 @@ HRESULT RTCKinect::WriteSkeleton()
  */
 HRESULT RTCKinect::WriteRawSound()
 {
-    BYTE *pData;
-    UINT32 framesAvailable;
-    DWORD  flags;
-	HRESULT hr;
-
-    hr = m_pAudioCaptureClient->GetBuffer(&pData, &framesAvailable, &flags, NULL, NULL);
-    if (SUCCEEDED(hr)) {
-        if (framesAvailable > 0) {
-			UINT32 dataSize = framesAvailable * m_AudioFrameSize;
-			m_sound.data.length(dataSize);
-            if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
-				for (UINT32 i = 0; i < dataSize; i++) {
-					m_sound.data[i] = 0;
-				}
-            } else {
-				for (UINT32 i = 0; i < dataSize; i++) {
-					m_sound.data[i] = pData[i];
-				}
-            }
-			m_depthOut.write();
-        }
-        hr = m_pAudioCaptureClient->ReleaseBuffer(framesAvailable);
-        if (FAILED(hr)) {
-			std::cout << "Unable to release capture buffer." << std::endl;
-        }
+	m_AudioBufferMutex.lock();
+	size_t bsize = m_AudioCurrentCaptureIndex;
+	size_t nsamples = bsize / m_AudioFrameSize;
+#if 0
+	std::cout << nsamples << std::endl;
+#endif
+	if (bsize > 0) {
+		m_sound.data.length(bsize);
+        CopyMemory(&m_sound.data[0], m_pAudioCaptureBuffer, bsize);
+		m_soundMonitor.data.length(nsamples * 2);
+		for (size_t i = 0; i < nsamples; i++) {
+#if 0
+            INT32 sample = (INT32)(m_pAudioCaptureBuffer[i * m_AudioFrameSize + 0]
+							    + (m_pAudioCaptureBuffer[i * m_AudioFrameSize + 1] << 8)
+						     	+ (m_pAudioCaptureBuffer[i * m_AudioFrameSize + 2] << 16)
+								+ (m_pAudioCaptureBuffer[i * m_AudioFrameSize + 3] << 24));
+			INT16 sample16 = (INT16)(sample / 65536);
+			m_soundMonitor.data[i*2+0] = (BYTE)(0xff & sample16);
+			m_soundMonitor.data[i*2+1] = (BYTE)(0xff & (sample16>>8));
+#endif
+			m_soundMonitor.data[i*2+0] = m_pAudioCaptureBuffer[i * m_AudioFrameSize + 2];
+			m_soundMonitor.data[i*2+1] = m_pAudioCaptureBuffer[i * m_AudioFrameSize + 3];
+		}
+    }
+	m_AudioCurrentCaptureIndex = 0;
+	m_AudioBufferMutex.unlock();
+	if (bsize > 0) {
+		m_soundOut.write();
+		m_soundMonitorOut.write();
     }
 	return S_OK;
 }
@@ -634,6 +674,77 @@ RTC::ReturnCode_t RTCKinect::onRateChanged(RTC::UniqueId ec_id)
   return RTC::RTC_OK;
 }
 */
+
+//
+//  Capture thread - processes samples from the audio engine
+//
+DWORD RTCKinect::AudioCaptureThread(LPVOID Context)
+{
+    RTCKinect *capturer = static_cast<RTCKinect *>(Context);
+    return capturer->DoAudioCaptureThread();
+}
+
+DWORD RTCKinect::DoAudioCaptureThread()
+{
+    bool loop = true;
+    HANDLE mmcssHandle = NULL;
+    DWORD mmcssTaskIndex = 0;
+
+	// create COM client
+	HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    if (FAILED(hr)) {
+		std::cout << "Unable to initialize COM in render thread." << std::endl;
+        return hr;
+    }
+
+	// give multimedia priority to this thread
+	mmcssHandle = AvSetMmThreadCharacteristics("Audio", &mmcssTaskIndex);
+    if (mmcssHandle == NULL) {
+		std::cout << "Unable to enable MMCSS on capture thread: " << GetLastError() << std::endl;
+    }
+    
+	std::cout << "Starting audio capture thread." << std::endl;
+
+    while (loop) {
+        HRESULT hr;
+		DWORD waitResult = WaitForSingleObject(m_AudioShutdownEvent, m_AudioLatency / 2);
+        switch (waitResult) {
+        case WAIT_OBJECT_0:
+            loop = false;
+            break;
+        case WAIT_TIMEOUT:
+            BYTE *pData;
+            UINT32 framesAvailable;
+            DWORD  flags;
+
+			hr = m_pAudioCaptureClient->GetBuffer(&pData, &framesAvailable, &flags, NULL, NULL);
+			if (SUCCEEDED(hr)) {
+				m_AudioBufferMutex.lock();
+				UINT32 framesToCopy = min(framesAvailable, static_cast<UINT32>((m_AudioCaptureBufferSize - m_AudioCurrentCaptureIndex) / m_AudioFrameSize));
+				if (framesToCopy != 0) {
+					if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+	                    ZeroMemory(&(m_pAudioCaptureBuffer[m_AudioCurrentCaptureIndex]), framesToCopy * m_AudioFrameSize);
+					} else {
+	                    CopyMemory(&(m_pAudioCaptureBuffer[m_AudioCurrentCaptureIndex]), pData, framesToCopy * m_AudioFrameSize);
+					}
+					m_AudioCurrentCaptureIndex += framesToCopy * m_AudioFrameSize;
+				}
+                hr = m_pAudioCaptureClient->ReleaseBuffer(framesAvailable);
+                if (FAILED(hr)) {
+					std::cout << "Unable to release audio capture buffer." << std::endl;
+                }
+				m_AudioBufferMutex.unlock();
+			}
+            break;
+        }
+    }
+    
+	std::cout << "Exiting audio capture thread." << std::endl;
+
+	AvRevertMmThreadCharacteristics(mmcssHandle);
+    CoUninitialize();
+    return 0;
+}
 
 
 

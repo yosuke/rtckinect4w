@@ -18,6 +18,7 @@
 #include <rtm/idl/BasicDataTypeSkel.h>
 #include <rtm/idl/ExtendedDataTypesSkel.h>
 #include <rtm/idl/InterfaceDataTypesSkel.h>
+#include <coil/Mutex.h>
 
 #include <MMDeviceAPI.h>
 #include <AudioClient.h>
@@ -331,6 +332,10 @@ class RTCKinect
   /*!
    */
   OutPort<TimedOctetSeq> m_soundOut;
+  TimedOctetSeq m_soundMonitor;
+  /*!
+   */
+  OutPort<TimedOctetSeq> m_soundMonitorOut;
   SoundSourceLocation m_soundSource;
   /*!
    */
@@ -375,6 +380,16 @@ class RTCKinect
     IAudioCaptureClient *m_pAudioCaptureClient;
     WAVEFORMATEX *      m_pAudioMixFormat;
     size_t              m_AudioFrameSize;
+    HANDLE              m_AudioCaptureThread;
+    HANDLE              m_AudioShutdownEvent;
+    LONG                m_AudioLatency;
+    BYTE *              m_pAudioCaptureBuffer;
+    size_t              m_AudioCaptureBufferSize;
+    size_t              m_AudioCurrentCaptureIndex;
+	coil::Mutex			m_AudioBufferMutex;
+
+    static DWORD __stdcall AudioCaptureThread(LPVOID Context);
+    DWORD RTCKinect::DoAudioCaptureThread();
 
 	HRESULT WriteRawSound();
 
